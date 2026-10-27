@@ -1,0 +1,36 @@
+set positional-arguments
+
+default:
+    @just --list
+
+fmt:
+    cargo fmt --all
+
+fmt-check:
+    cargo fmt --all -- --check
+
+lint:
+    cargo clippy --locked --all-targets -- -D warnings
+
+test:
+    cargo test --locked --all-targets
+    cargo test --locked --doc
+
+doc:
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
+
+coverage:
+    cargo llvm-cov --locked --all-targets --fail-under-lines 90
+
+check: fmt-check lint test doc coverage
+
+build:
+    cargo build --locked --release
+    mkdir -p bin
+    cp target/release/{{ binary }} bin/{{ binary }}
+
+run *args:
+    cargo run --quiet --locked -- "$@"
+
+run-ai *args:
+    AGENT=1 cargo run --quiet --locked -- "$@"

@@ -1,0 +1,297 @@
+{% raw %}//! Command execution, help, and display policy for {% endraw %}{{ binary }}{% raw %}.
+
+use clap::{Arg, Command, error::ErrorKind, value_parser};
+use clap_complete::Shell;
+use std::{
+    ffi::OsString,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub const BINARY: &str = "{% endraw %}{{ binary }}{% raw %}";
+pub const SKILL: &str = include_str!("../skills/{% endraw %}{{ binary }}{% raw %}/SKILL.md");
+
+/// Display settings; filesystem operations always retain their native paths.
+#[derive(Clone, Debug)]
+pub struct Mode {
+    pub agent: bool,
+    pub width: usize,
+    pub home: Option<PathBuf>,
+}
+
+impl Mode {
+    /// Reads output mode, native terminal width, and the platform home directory.
+    pub fn from_env() -> Self {
+        let agent = agent_value(std::env::var("AGENT").ok().as_deref());
+        let columns = std::env::var("COLUMNS").ok().and_then(|s| s.parse().ok());
+        let width = terminal_size::terminal_size()
+            .map(|(width, _)| usize::from(width.0))
+            .or(columns)
+            .filter(|width| *width > 0)
+            .unwrap_or(80);
+        Self {
+            agent,
+            width,
+            home: dirs::home_dir(),
+        }
+    }
+}
+
+/// Recognizes the documented truthy AGENT values without changing the process environment.
+pub fn agent_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        ["1", "true", "yes"].contains(&value.trim().to_ascii_lowercase().as_str())
+    })
+}
+
+/// Builds the native Clap interface and its recursively rendered help tree.
+pub fn command(mode: &Mode) -> Command {
+    let root = Command::new(BINARY)
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .disable_help_subcommand(true)
+        .subcommand(
+            Command::new("system")
+                .about("Inspect the local environment")
+                .subcommand(
+                    Command::new("status").about("Show readiness, version, and working directory"),
+                ),
+        )
+        .subcommand(Command::new("skill").about("Read the complete operational guide"))
+        .subcommand(
+            Command::new("completion")
+                .about("Print a shell completion script")
+                .arg(
+                    Arg::new("shell")
+                        .required(true)
+                        .value_parser(value_parser!(Shell)),
+                ),
+        );
+    decorate(root, mode)
+}
+
+fn decorate(command: Command, mode: &Mode) -> Command {
+    let tree = command_tree(&command, mode);
+    let alert = if mode.agent {
+        format!("ALERT: Agents must read `AGENT=1 {BINARY} skill` before using this tool.\n")
+    } else {
+        String::new()
+    };
+    let template = format!("{alert}{{about}}\n\nUsage: {{usage}}\n\n{tree}{{all-args}}");
+    command
+        .color(clap::ColorChoice::Never)
+        .term_width(if mode.agent { 0 } else { mode.width })
+        .help_template(template)
+        .mut_subcommands(|child| decorate(child, mode))
+}
+
+fn tree_rows(command: &Command, prefix: &str, mode: &Mode, rows: &mut Vec<(String, String)>) {
+    let children: Vec<_> = command
+        .get_subcommands()
+        .filter(|child| !child.is_hide_set())
+        .collect();
+    for (index, child) in children.iter().enumerate() {
+        let last = index + 1 == children.len();
+        let branch = if mode.agent {
+            "- "
+        } else if last {
+            "╰─ "
+        } else {
+            "├─ "
+        };
+        rows.push((
+            format!("{prefix}{branch}{}", child.get_name()),
+            child
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        ));
+        let continuation = if mode.agent {
+            "  "
+        } else if last {
+            "   "
+        } else {
+            "│  "
+        };
+        tree_rows(child, &format!("{prefix}{continuation}"), mode, rows);
+    }
+}
+
+fn command_tree(command: &Command, mode: &Mode) -> String {
+    let mut rows = Vec::new();
+    tree_rows(command, "", mode, &mut rows);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let column = rows
+        .iter()
+        .map(|(label, _)| label.width())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let mut result = String::from("Commands:\n");
+    for (label, description) in rows {
+        let line = if mode.agent {
+            format!("{label}: {description}")
+        } else {
+            format!("{label}{}{description}", " ".repeat(column - label.width()))
+        };
+        result.push_str(&if mode.agent {
+            line
+        } else {
+            trim_line(&line, mode.width)
+        });
+        result.push('\n');
+    }
+    result.push('\n');
+    result
+}
+
+fn trim_line(line: &str, width: usize) -> String {
+    if line.width() <= width {
+        return line.into();
+    }
+    let ellipsis = if width >= 3 { "..." } else { "" };
+    let maximum = width.saturating_sub(ellipsis.len());
+    let mut used = 0;
+    let mut result = String::new();
+    for character in line.chars() {
+        let columns = character.width().unwrap_or(0);
+        if used + columns > maximum {
+            break;
+        }
+        used += columns;
+        result.push(character);
+    }
+    result.push_str(ellipsis);
+    result
+}
+
+/// Folds only an actual home-directory path prefix, preserving sibling names.
+pub fn display_path(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(relative) if relative.as_os_str().is_empty() => "~".into(),
+        Some(relative) => Path::new("~").join(relative).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Folds complete home path occurrences in diagnostics, including quoted paths.
+pub fn display_message(message: &str, home: Option<&Path>) -> String {
+    let Some(home) = home.and_then(Path::to_str).filter(|home| !home.is_empty()) else {
+        return message.into();
+    };
+    let mut result = String::new();
+    let mut start = 0;
+    for (index, _) in message.match_indices(home) {
+        let end = index + home.len();
+        let before = message[..index].chars().next_back();
+        let after = message[end..].chars().next();
+        let boundary = |c: char| c.is_whitespace() || "\"'`[]():,;=".contains(c);
+        if before.is_none_or(boundary) && after.is_none_or(|c| boundary(c) || c == '/' || c == '\\')
+        {
+            result.push_str(&message[start..index]);
+            result.push('~');
+            start = end;
+        }
+    }
+    result.push_str(&message[start..]);
+    result
+}
+
+/// Writes one typed I/O failure at the entrypoint's owning error boundary.
+pub fn report_error(error: &io::Error, mode: &Mode, stderr: &mut dyn Write) -> io::Result<()> {
+    let prefix = if mode.agent { "ERR:" } else { "[ERROR]" };
+    writeln!(
+        stderr,
+        "{prefix} {}",
+        display_message(&error.to_string(), mode.home.as_deref())
+    )
+}
+
+/// Executes an invocation with checked output writes. Usage errors return 2.
+/// Help/version/success return 0; I/O failures are returned to the caller.
+pub fn execute<I, T>(
+    args: I,
+    mode: &Mode,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> io::Result<u8>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let mut root = command(mode);
+    let matches = match root.try_get_matches_from_mut(args) {
+        Ok(matches) => matches,
+        Err(error) => {
+            let text = if error.kind() == ErrorKind::DisplayVersion {
+                format!("{}\n", env!("CARGO_PKG_VERSION"))
+            } else {
+                display_message(&error.to_string(), mode.home.as_deref())
+            };
+            if error.use_stderr() {
+                stderr.write_all(text.as_bytes())?;
+                return Ok(2);
+            }
+            stdout.write_all(text.as_bytes())?;
+            return Ok(0);
+        }
+    };
+    match matches.subcommand() {
+        Some(("skill", _)) => stdout.write_all(SKILL.as_bytes())?,
+        Some(("completion", arguments)) => {
+            let shell = *arguments
+                .get_one::<Shell>("shell")
+                .expect("Clap requires a shell");
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut root, BINARY, &mut script);
+            stdout.write_all(&script)?;
+        }
+        Some(("system", arguments)) if arguments.subcommand_name() == Some("status") => {
+            write_status(stdout, mode, &std::env::current_dir()?)?;
+        }
+        Some(("system", _)) => stdout.write_all(
+            root.find_subcommand_mut("system")
+                .expect("system is registered")
+                .render_help()
+                .to_string()
+                .as_bytes(),
+        )?,
+        _ => stdout.write_all(root.render_help().to_string().as_bytes())?,
+    }
+    Ok(0)
+}
+
+/// Prints readiness and the display-only current directory in the requested mode.
+pub fn write_status(stdout: &mut dyn Write, mode: &Mode, current: &Path) -> io::Result<()> {
+    let current = display_path(current, mode.home.as_deref());
+    if mode.agent {
+        writeln!(
+            stdout,
+            "status: ready\nversion: {}\ndirectory: {current}",
+            env!("CARGO_PKG_VERSION")
+        )
+    } else {
+        writeln!(
+            stdout,
+            "[OK] System status: ready\nVersion: {}\nDirectory: {current}",
+            env!("CARGO_PKG_VERSION")
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_line;
+    #[test]
+    fn trimming_counts_terminal_columns_and_handles_tiny_widths() {
+        assert_eq!(trim_line("abc", 3), "abc");
+        assert_eq!(trim_line("abcdef", 5), "ab...");
+        assert_eq!(trim_line("界界ab", 5), "界...");
+        assert_eq!(trim_line("界a", 1), "");
+        assert_eq!(trim_line("abcd", 2), "ab");
+        assert_eq!(trim_line("abcd", 0), "");
+    }
+}{% endraw %}

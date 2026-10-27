@@ -1,0 +1,49 @@
+---
+name: {{ binary }}
+description: Use when inspecting local system status or generating shell completions with {{ binary }}.
+author: {{ author_toml }}
+metadata:
+  created_on: {{ created_date }}
+  last_modified: {{ created_date }}
+  status: current
+---
+
+Read this guide before executing `{{ binary }}`. Use `AGENT=1` for compact output. All commands are local and read-only; completion prints a script for the caller to save or source.
+
+## `{{ binary }}`
+
+Print root help with no arguments. Use `--help` or `-h` on any command. Agent help begins with an instruction to read this guide. Human help presents an aligned command tree, truncated to terminal width.
+
+Use `--version` or `-V` at the root to print only the package version and newline.
+
+## `{{ binary }} system`
+
+Print system help when no verb is supplied.
+
+## `{{ binary }} system status`
+
+Print readiness, package version, and the current directory. Agent output has `status:`, `version:`, and `directory:` lines. Human output uses `[OK] System status:`, `Version:`, and `Directory:` labels. Display paths fold a complete home prefix to `~`; filesystem operations retain native paths.
+
+## `{{ binary }} skill`
+
+Print this complete embedded document verbatim. This command reads no repository files at runtime.
+
+## `{{ binary }} completion`
+
+Supply the required positional `shell`: `bash`, `elvish`, `fish`, `powershell`, or `zsh`. Print its completion script to stdout. For example, run `{{ binary }} completion bash` and save the result using the shell's redirection.
+
+## Environment and results
+
+`AGENT` enables agent output for `1`, `true`, or `yes`, case-insensitively with surrounding whitespace ignored. Other values use human output.
+
+Human width uses the native terminal size, then a positive integer `COLUMNS`, then 80 columns. Agent output remains unwrapped. Native platform home-directory discovery controls display folding.
+
+Successful commands, help, and version exit 0. Offline usage errors exit 2 and write native parser diagnostics to stderr. Runtime I/O failures exit 1 and write one error to stderr, prefixed `ERR:` in agent mode or `[ERROR]` in human mode. Results use stdout; output write failures are errors.
+
+Examples:
+
+```console
+AGENT=1 {{ binary }} system status
+{{ binary }} completion zsh
+{{ binary }} --version
+```

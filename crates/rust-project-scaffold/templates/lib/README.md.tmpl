@@ -1,0 +1,22 @@
+# {{ name }}
+
+{{ description }}
+
+A standalone Rust library providing checked unsigned addition.
+
+## Usage
+
+Add this package from your local checkout or its repository. Registry packages have not been published.
+
+```rust
+assert_eq!({{ crate_name }}::add(20, 22), Some(42));
+assert_eq!({{ crate_name }}::add(u64::MAX, 1), None);
+```
+
+`add` returns `None` when the sum exceeds `u64::MAX`. It performs no I/O and has no runtime dependencies.
+
+Contributor checks and release constraints live in [AGENTS.md](AGENTS.md). The manual release workflow prepares a crate archive in a draft GitHub release; publishing to a package registry is a separate owner action.
+
+## License
+
+[MIT](LICENSE).

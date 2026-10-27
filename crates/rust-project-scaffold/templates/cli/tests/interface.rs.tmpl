@@ -1,0 +1,328 @@
+{% raw %}use {% endraw %}{{ crate_name }}{% raw %}::{
+    BINARY, Mode, SKILL, agent_value, command, display_message, display_path, execute,
+    report_error, write_status,
+};
+
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+fn mode(agent: bool) -> Mode {
+    Mode {
+        agent,
+        width: 80,
+        home: Some(PathBuf::from("/home/example")),
+    }
+}
+
+fn run(args: &[&str], agent: bool) -> (u8, String, String) {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = execute(
+        std::iter::once(BINARY).chain(args.iter().copied()),
+        &mode(agent),
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    (
+        code,
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
+#[test]
+fn status_version_and_metadata_have_checked_mode_specific_output() {
+    for agent in [false, true] {
+        assert_eq!(
+            run(&["--version"], agent),
+            (0, "0.1.0\n".into(), String::new())
+        );
+        assert_eq!(run(&["-V"], agent).1, "0.1.0\n");
+        let status = run(&["system", "status"], agent);
+        assert_eq!(status.0, 0);
+        assert!(status.2.is_empty());
+        assert!(status.1.contains(if agent {
+            "status: ready"
+        } else {
+            "[OK] System status: ready"
+        }));
+        assert!(
+            status
+                .1
+                .contains(if agent { "directory:" } else { "Directory:" })
+        );
+        assert_eq!(run(&["skill"], agent), (0, SKILL.into(), String::new()));
+        assert_eq!(run(&["skill", "extra"], agent).0, 2);
+        let extra = run(&["system", "status", "extra"], agent);
+        assert_eq!(extra.0, 2);
+        assert!(extra.1.is_empty());
+        assert!(extra.2.contains("unexpected argument"));
+        assert_eq!(run(&["unknown"], agent).0, 2);
+        assert_eq!(run(&["completion", "unknown"], agent).0, 2);
+        assert_eq!(run(&["completion"], agent).0, 2);
+    }
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        let result = run(&["completion", shell], true);
+        assert_eq!(result.0, 0);
+        assert!(result.1.contains(BINARY), "{shell}: {}", result.1);
+        assert!(result.2.is_empty());
+    }
+}
+
+#[test]
+fn every_help_screen_has_the_correct_alert_and_full_subtree() {
+    for agent in [false, true] {
+        for path in [
+            vec![],
+            vec!["system"],
+            vec!["system", "status"],
+            vec!["skill"],
+            vec!["completion"],
+        ] {
+            for flag in ["--help", "-h"] {
+                let mut args = path.clone();
+                args.push(flag);
+                let result = run(&args, agent);
+                assert_eq!(result.0, 0, "{args:?}");
+                assert!(result.2.is_empty());
+                assert_eq!(result.1.starts_with("ALERT:"), agent, "{args:?}");
+                assert!(result.1.contains("Usage:"));
+            }
+        }
+        assert_eq!(run(&[], agent).1, run(&["--help"], agent).1);
+        assert_eq!(
+            run(&["system"], agent).1,
+            run(&["system", "--help"], agent).1
+        );
+    }
+    let human = run(&["--help"], false).1;
+    assert!(human.contains("├─ system"));
+    assert!(human.contains("│  ╰─ status"));
+    assert!(human.contains("╰─ completion"));
+    let agent = run(&["--help"], true).1;
+    assert!(agent.contains("- system:"));
+    assert!(agent.contains("  - status:"));
+    let narrow = Mode {
+        width: 24,
+        ..mode(false)
+    };
+    let help = command(&narrow).render_help().to_string();
+    assert!(help.contains("..."));
+    assert!(
+        help.lines()
+            .filter(|line| line.contains('─'))
+            .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 24)
+    );
+}
+
+#[test]
+fn skill_tracks_the_live_command_and_argument_interface() {
+    fn visit(command: &clap::Command, path: &str) {
+        let section = format!("## `{path}`");
+        assert!(SKILL.contains(&section), "missing {section}");
+        for argument in command.get_arguments() {
+            if let Some(long) = argument.get_long() {
+                assert!(
+                    SKILL.contains(&format!("--{long}")),
+                    "missing --{long} in {path}"
+                );
+            }
+            if let Some(short) = argument.get_short() {
+                assert!(SKILL.contains(&format!("-{short}")), "missing -{short}");
+            }
+            if argument.is_positional() {
+                assert!(
+                    SKILL.contains(argument.get_id().as_str()),
+                    "missing argument {}",
+                    argument.get_id()
+                );
+                if let Some(values) = argument.get_value_parser().possible_values() {
+                    for value in values {
+                        assert!(SKILL.contains(value.get_name()));
+                    }
+                }
+            }
+        }
+        for child in command.get_subcommands() {
+            visit(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+    let mut root = command(&mode(true));
+    root.build();
+    visit(&root, BINARY);
+    assert!(SKILL.contains(&format!("name: {BINARY}\n")));
+    assert!(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("skills")
+            .join(BINARY)
+            .join("SKILL.md")
+            .is_file()
+    );
+}
+
+#[test]
+fn display_folds_home_at_path_boundaries_in_both_output_modes() {
+    let home = Path::new("/home/example");
+    for (path, expected) in [
+        ("/home/example", "~"),
+        ("/home/example/music", "~/music"),
+        ("/home/example-other/music", "/home/example-other/music"),
+        ("/elsewhere", "/elsewhere"),
+    ] {
+        let expected = expected.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let actual = display_path(Path::new(path), Some(home));
+        assert_eq!(
+            actual,
+            if expected.starts_with('~') {
+                expected
+            } else {
+                path.into()
+            }
+        );
+    }
+    assert_eq!(display_path(Path::new("relative"), None), "relative");
+    assert_eq!(
+        display_message(
+            "open '/home/example/a'; [/home/example] /home/example-other",
+            Some(home)
+        ),
+        "open '~/a'; [~] /home/example-other"
+    );
+    assert_eq!(
+        display_message("x/home/example/a", Some(home)),
+        "x/home/example/a"
+    );
+    assert_eq!(display_message("/home/example", Some(home)), "~");
+    assert_eq!(display_message("unchanged", None), "unchanged");
+    assert_eq!(
+        display_message("unchanged", Some(Path::new(""))),
+        "unchanged"
+    );
+    for agent in [false, true] {
+        let mut output = Vec::new();
+        write_status(&mut output, &mode(agent), &home.join("project")).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains(&format!("~{}project", std::path::MAIN_SEPARATOR))
+        );
+        let mut error = Vec::new();
+        report_error(
+            &io::Error::other("open '/home/example/file' failed"),
+            &mode(agent),
+            &mut error,
+        )
+        .unwrap();
+        let error = String::from_utf8(error).unwrap();
+        assert!(error.starts_with(if agent { "ERR:" } else { "[ERROR]" }));
+        assert!(error.contains("'~/file'"));
+    }
+}
+
+struct FailedWriter;
+impl Write for FailedWriter {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed output"))
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn every_output_path_propagates_writer_failures_without_panicking() {
+    for args in [
+        vec![],
+        vec!["--help"],
+        vec!["--version"],
+        vec!["system"],
+        vec!["system", "status"],
+        vec!["skill"],
+        vec!["completion", "fish"],
+    ] {
+        let result = execute(
+            std::iter::once(BINARY).chain(args),
+            &mode(true),
+            &mut FailedWriter,
+            &mut Vec::new(),
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+    assert_eq!(
+        execute(
+            [BINARY, "unknown"],
+            &mode(true),
+            &mut Vec::new(),
+            &mut FailedWriter
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert!(
+        report_error(
+            &io::Error::other("failure"),
+            &mode(false),
+            &mut FailedWriter
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn truthy_modes_and_real_process_streams_match_the_contract() {
+    for value in ["1", "true", "YES", " True "] {
+        assert!(agent_value(Some(value)));
+    }
+    for value in [None, Some("0"), Some("false"), Some("")] {
+        assert!(!agent_value(value));
+    }
+
+    let binary = env!("CARGO_BIN_EXE_{% endraw %}{{ binary }}{% raw %}");
+
+    for agent in ["0", " YES "] {
+        let output = Command::new(binary)
+            .env("AGENT", agent)
+            .env("COLUMNS", "30")
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            output.stdout.starts_with(b"ALERT:"),
+            agent_value(Some(agent))
+        );
+    }
+    let version = Command::new(binary)
+        .env_remove("AGENT")
+        .env("COLUMNS", "not-a-number")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    assert_eq!(version.stdout, b"0.1.0\n");
+    let error = Command::new(binary).arg("unknown").output().unwrap();
+    assert_eq!(error.status.code(), Some(2));
+    assert!(error.stdout.is_empty());
+    assert!(!error.stderr.is_empty());
+    #[cfg(target_os = "linux")]
+    {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let output = Command::new(binary)
+            .env("AGENT", "1")
+            .arg("skill")
+            .stdout(full)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.starts_with(b"ERR:"));
+    }
+}{% endraw %}

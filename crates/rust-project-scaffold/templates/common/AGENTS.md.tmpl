@@ -1,0 +1,39 @@
+---
+created_on: {{ created_date }}
+last_modified: {{ created_date }}
+status: current
+---
+
+# {{ name }}
+
+Standalone Rust {{ "CLI" if is_cli else "library" }} using edition {{ edition }} and minimum Rust {{ rust_version }}.
+
+## Development
+
+- Install Rust with rustfmt, Clippy, matching LLVM tools, just, and cargo-llvm-cov.
+- Resolve dependencies with `cargo generate-lockfile` and commit `Cargo.lock`. This is required before locked builds when generation hooks were skipped.
+- Format: `just fmt`; lint: `just lint`; test including documentation examples: `just test`; docs: `just doc`.
+- Run `just check` for the complete gate, including at least 90% line coverage. Build: `just build`.
+- Keep temporary files in `.tmp/`, preserve unfinished incremental caches, and monitor build storage.
+- Read relevant installed language and domain skills before implementation. Verify external APIs against official documentation.
+
+## Contracts
+
+- Add a behavioral regression before changing observable behavior. Record a failing baseline, green tests, and a genuine implementation-disable failure followed by exact restoration.
+- Keep native filesystem paths separate from display formatting. Return typed errors and propagate output failures.
+- Maintain at least 90% line coverage through actual behavior; never substitute static configuration assertions for behavioral tests.
+- Keep modules focused and use maintained dependencies through their native APIs.
+{% if is_cli %}
+- Keep subject-first commands at most three levels deep and dual-mode output through `AGENT=1`. Human output uses status labels and aligned tree help; agent output uses compact lines. Neither mode uses emoji.
+- `main` owns returned error reporting. Preserve exit 0 for success/help/version, 1 for runtime I/O failure, and 2 for offline usage errors.
+- `--version` prints exactly the package version and newline. Every agent help screen starts with the skill alert.
+- Keep `skills/{{ binary }}/SKILL.md` synchronized with every command, option, default, environment variable, output, and exit status. Embed that single file using `include_str!` and print its full bytes through `skill`; this full-guide contract explicitly overrides an install-pointer-only skill convention.
+- Maintain live command/argument documentation and failing-output tests. Completion generation goes into memory before the checked external write.
+- Run human mode with `just run <args>` and agent mode with `just run-ai <args>`. `just build` writes `bin/{{ binary }}`.
+{% endif %}
+
+## Boundaries
+
+- Do not publish tags, releases, packages, or deployments without the owner's explicit authorization. Release workflows prepare drafts.
+- Do not claim generated artifacts are published before publication is verified.
+- Keep standing guidance here; store progress and execution evidence in `.tmp/`.

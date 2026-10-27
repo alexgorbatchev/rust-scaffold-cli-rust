@@ -1,0 +1,74 @@
+{% raw %}name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag }}
+  binary:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux-x86_64
+          - runner: macos-latest
+            platform: macos-aarch64
+          - runner: macos-15-intel
+            platform: macos-x86_64
+          - runner: windows-latest
+            platform: windows-x86_64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --release
+      - name: Verify version and archive the actual binary
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          version="$(target/release/{% endraw %}{{ binary }}{% raw %} --version)"
+          test "$RELEASE_TAG" = "v$version"
+          mkdir -p stage dist
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp target/release/{% endraw %}{{ binary }}{% raw %}.exe stage/
+          else
+            cp target/release/{% endraw %}{{ binary }}{% raw %} stage/
+          fi
+          cp LICENSE stage/
+          tar -czf "dist/{% endraw %}{{ binary }}{% raw %}-$RELEASE_TAG-$PLATFORM.tar.gz" -C stage .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*.tar.gz
+  draft:
+    needs: binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*'
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          draft: true
+          files: dist/*.tar.gz
+{% endraw %}

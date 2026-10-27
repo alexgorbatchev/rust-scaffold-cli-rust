@@ -1,0 +1,25 @@
+[package]
+name = {{ name_toml }}
+version = "0.1.0"
+edition = {{ edition_toml }}
+rust-version = {{ rust_version_toml }}
+description = {{ description_toml }}
+authors = [{{ author_toml }}]
+license = "MIT"
+repository = {{ repository_toml }}
+
+[lib]
+name = {{ crate_name_toml }}
+
+[[bin]]
+name = {{ binary_toml }}
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["string", "wrap_help"] }
+clap_complete = "4.6"
+dirs = "7"
+terminal_size = "0.4"
+unicode-width = "0.2"
+
+[workspace]

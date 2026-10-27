@@ -1,0 +1,12 @@
+{% raw %}//! A small checked arithmetic library.
+//!
+//! ```
+//! assert_eq!({% endraw %}{{ crate_name }}{% raw %}::add(20, 22), Some(42));
+//! assert_eq!({% endraw %}{{ crate_name }}{% raw %}::add(u64::MAX, 1), None);
+//! ```
+
+/// Adds two unsigned integers, returning `None` when the sum would overflow.
+#[must_use]
+pub fn add(left: u64, right: u64) -> Option<u64> {
+    left.checked_add(right)
+}{% endraw %}

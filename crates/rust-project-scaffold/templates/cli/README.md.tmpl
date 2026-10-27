@@ -1,0 +1,28 @@
+# {{ name }}
+
+{{ description }}
+
+A standalone Rust CLI with local system status, shell completions, and an embedded operational guide.
+
+## Installation
+
+This generated project has no published artifacts yet. Once its owner publishes a release, download the archive for your operating system from [GitHub Releases]({{ repository }}/releases), extract it, and place `{{ binary }}` on your PATH. The release workflow prepares drafts for owner review.
+
+## Usage
+
+```console
+{{ binary }} system status
+{{ binary }} --help
+{{ binary }} completion bash
+AGENT=1 {{ binary }} skill
+```
+
+`system status` prints readiness, package version, and the current directory. Human output uses labeled status lines; `AGENT=1` emits compact key-value lines. Home directories appear as `~` in display output.
+
+`--version` prints only the version and newline. Every command accepts `--help` and `-h`. Root invocation and `system` without a verb print help.
+
+Read the complete [operational skill](skills/{{ binary }}/SKILL.md), also embedded verbatim in `{{ binary }} skill`. Contributor commands and repository constraints live in [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE).

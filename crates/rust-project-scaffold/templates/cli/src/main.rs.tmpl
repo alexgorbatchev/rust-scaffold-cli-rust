@@ -1,0 +1,20 @@
+{% raw %}use {% endraw %}{{ crate_name }}{% raw %}::{Mode, execute, report_error};
+
+use std::{io, process::ExitCode};
+
+fn main() -> ExitCode {
+    let mode = Mode::from_env();
+    let result = execute(
+        std::env::args_os(),
+        &mode,
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    );
+    match result {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            let _ = report_error(&error, &mode, &mut io::stderr().lock());
+            ExitCode::FAILURE
+        }
+    }
+}{% endraw %}

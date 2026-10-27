@@ -1,0 +1,9 @@
+{% raw %}use {% endraw %}{{ crate_name }}{% raw %}::add;
+
+#[test]
+fn addition_handles_zero_regular_values_and_overflow() {
+    assert_eq!(add(20, 22), Some(42));
+    assert_eq!(add(0, u64::MAX), Some(u64::MAX));
+    assert_eq!(add(u64::MAX, 0), Some(u64::MAX));
+    assert_eq!(add(u64::MAX, 1), None);
+}{% endraw %}

@@ -1,0 +1,28 @@
+set dotenv-load := false
+
+default:
+    @just --list
+
+fmt:
+    cargo fmt --package rust-project-scaffold
+
+fmt-check:
+    cargo fmt --package rust-project-scaffold -- --check
+
+lint:
+    cargo clippy --locked --package rust-project-scaffold --all-targets -- -D warnings
+
+test:
+    cargo test --locked --package rust-project-scaffold --all-targets
+
+coverage:
+    cargo llvm-cov --locked --package rust-project-scaffold --exclude-from-report rust-scaffold-cli --all-targets --fail-under-lines 90
+
+docs:
+    RUSTDOCFLAGS='-D warnings' cargo test --locked --package rust-project-scaffold --doc
+    RUSTDOCFLAGS='-D warnings' cargo doc --package rust-project-scaffold --no-deps --locked
+
+check: fmt-check lint test docs coverage
+
+build:
+    cargo build --locked --package rust-project-scaffold --lib
